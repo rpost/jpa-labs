@@ -62,6 +62,18 @@ public class JpaTest {
     //region persisting
     @Test
     void persistMakesTransientEntityPersistentAkaManaged() {
+        MyEntity entity = new MyEntity();
+        Long id = txHelper.doInTransaction(() -> {
+            System.err.println(entity);
+            System.err.println(entityManager.contains(entity));
+            entityManager.persist(entity);
+            System.err.println(entity);
+            System.err.println(entityManager.contains(entity));
+            return entity.getId();
+        });
+
+        MyEntity saved = entityManager.find(MyEntity.class, id);
+        System.err.println(saved);
     }
 
     //endregion
@@ -75,6 +87,16 @@ public class JpaTest {
     // this is called jpa first leve cache
     @Test
     void returnsEntityFromPersistenceContextIfAlreadyKnown() {
+        MyEntity entity = new MyEntity();
+        txHelper.doInTransaction(() -> {
+            entityManager.persist(entity);
+
+            MyEntity foundById = entityManager.find(MyEntity.class, entity.getId());
+            MyEntity foundByQuery = entityManager.createQuery("from MyEntity", MyEntity.class).getSingleResult();
+
+            Assertions.assertTrue(entity==foundById);
+            Assertions.assertTrue(entity==foundByQuery);
+        });
     }
 
     //endregion
@@ -87,6 +109,17 @@ public class JpaTest {
     // persistence context might grow unexpectedly big -> boom: OOM
     @Test
     void mightExplodeIfHugeAmountsOfDataIsProcessedWithinSinglePersistenceContext() {
+        for (int i = 0; i < 1_000_000; i++) {
+            txHelper.doInTransaction(() -> {
+                entityManager.persist(new MyEntity());
+            });
+        }
+
+        entityManager.createQuery("from MyEntity", MyEntity.class)
+                .getResultStream()
+                .forEach(myEntity -> {
+                    // do smth with entity
+                });
     }
 
     // solution for this is
@@ -104,6 +137,17 @@ public class JpaTest {
     // they are automatically sent to database
     @Test
     void synchronizesPersistentEntityWithDatabase() {
+        Long id = txHelper.doInTransaction(() -> {
+            MyEntity entity = new MyEntity();
+            entityManager.persist(entity);
+
+            entity.setS("hehe");
+            return entity.getId();
+        });
+
+        MyEntity saved = entityManager.find(MyEntity.class, id);
+
+        Assertions.assertEquals("hehe", saved.getS());
     }
 
     //endregion
@@ -115,6 +159,18 @@ public class JpaTest {
     // ... this means you don't have to persist second time if you are within transaction!
     @Test
     void youDontHaveToPersistSecondTime() {
+        Long id = txHelper.doInTransaction(() -> {
+            MyEntity entity = new MyEntity();
+            entityManager.persist(entity);
+
+            entity.setS("hehe");
+            entityManager.persist(entity); // or repository.save(entity)
+            return entity.getId();
+        });
+
+        MyEntity saved = entityManager.find(MyEntity.class, id);
+
+        Assertions.assertEquals("hehe", saved.getS());
     }
 
     //endregion
@@ -127,6 +183,32 @@ public class JpaTest {
     // which is lazy loaded proxy
     @Test
     void referenceIsLazyLoadedProxy() {
+        Long id = txHelper.doInTransaction(() -> {
+            MyEntity entity = new MyEntity();
+            entityManager.persist(entity);
+            return entity.getId();
+        });
+
+        PersistenceUnitUtil puu = entityManager.getEntityManagerFactory().getPersistenceUnitUtil();
+
+        txHelper.doInTransaction(() -> {
+            MyEntity reference = entityManager.getReference(MyEntity.class, id);
+            Assertions.assertEquals(id, reference.getId());
+            System.err.println(puu.isLoaded(reference));
+            System.err.println(Hibernate.isInitialized(reference));
+            System.err.println(entityManager.contains(reference));
+//            Assertions.assertEquals(null, reference.getS());
+//            System.err.println(puu.isLoaded(reference));
+//            System.err.println(Hibernate.isInitialized(reference));
+//            System.err.println(entityManager.contains(reference));
+        });
+
+//        MyEntity reference = txHelper.doInTransaction(() -> {
+//            return entityManager.getReference(MyEntity.class, id);
+//        });
+//        Assertions.assertEquals(id, reference.getId());
+//        Assertions.assertEquals(null, reference.getS());
+
     }
     //endregion
 
@@ -173,6 +255,22 @@ public class JpaTest {
     //region removed state
     @Test
     void removeRemoves() {
+        Long id = txHelper.doInTransaction(() -> {
+            MyEntity entity = new MyEntity();
+            entityManager.persist(entity);
+            return entity.getId();
+        });
+
+        txHelper.doInTransaction(() -> {
+            MyEntity entity = entityManager.find(MyEntity.class, id);
+            entityManager.remove(entity);
+            //from this point up to PC close entity is in state removed
+
+            //book say you can cancel this by calling persist :shrug:
+        });
+
+        MyEntity notFound = entityManager.find(MyEntity.class, id);
+        Assertions.assertNull(notFound);
     }
     //endregion
 
@@ -217,6 +315,30 @@ public class JpaTest {
     // - on demand (EntityManager.flush)
     @Test
     void youCanControlFlushing() {
+        Long id = txHelper.doInTransaction(() -> {
+            MyEntity entity = new MyEntity();
+            entityManager.persist(entity);
+            entity.setS("hehe");
+            return entity.getId();
+        });
+
+        txHelper.doInTransaction(() -> {
+            entityManager.setFlushMode(FlushModeType.COMMIT);
+            MyEntity entity = entityManager.find(MyEntity.class, id);
+            entity.setS("changed");
+
+            MyEntity foundByQuery = entityManager.createQuery("from MyEntity", MyEntity.class).getSingleResult();
+            // puzzle: what will be result:
+            System.err.println(entity.getS());
+            System.err.println(foundByQuery.getS());
+            System.err.println(entity);
+            System.err.println(foundByQuery);
+
+            // puzzle: what if i query for just s instead of whole entity?
+        });
+
+        MyEntity foundByQuery = entityManager.createQuery("from MyEntity", MyEntity.class).getSingleResult();
+        System.err.println(foundByQuery.getS());
     }
 
     //endregion
